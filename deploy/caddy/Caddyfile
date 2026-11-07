@@ -1,0 +1,23 @@
+# 本机反代。默认只监听 127.0.0.1:18766。
+# 小智固件 2.5.2 开机时要先 POST OTA，再连 WebSocket。
+# 只反代 WebSocket 时，设备拿不到新 token，过期或服务端换 key 之后就无法重连。
+#
+# 不要把这个端口公布到公网：OTA 没有设备侧密钥，知道允许列表里的 MAC
+# 就可以换到 token。把监听地址改成局域网网卡是父机自己的事。
+
+{
+	admin off
+	auto_https off
+}
+
+http://127.0.0.1:18766 {
+	handle /xiaozhi/v1/* {
+		reverse_proxy 127.0.0.1:8000
+	}
+	handle /xiaozhi/ota* {
+		reverse_proxy 127.0.0.1:8003
+	}
+	handle {
+		respond "not found" 404
+	}
+}

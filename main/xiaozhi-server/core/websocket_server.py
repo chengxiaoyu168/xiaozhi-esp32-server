@@ -32,7 +32,7 @@ _setup_websockets_logger()
 
 from core.connection import ConnectionHandler
 from config.config_loader import get_config_from_api_async
-from core.auth import AuthManager, AuthenticationError
+from core.auth import AuthManager, AuthenticationError, device_allowed
 from core.utils.modules_initialize import initialize_modules
 from core.utils.util import check_vad_update, check_asr_update
 
@@ -208,24 +208,22 @@ class WebSocketServer:
             return False
 
     async def _handle_auth(self, websocket: websockets.ServerConnection):
-        # 先认证，后建立连接
+        # 先认证，后建立连接。开启认证后，白名单只决定谁可以拿 token，
+        # 连接本身必须带 OTA 签发的 token，不再对白名单设备免校验。
         if self.auth_enable:
             headers = dict(websocket.request.headers)
             device_id = headers.get("device-id", None)
             client_id = headers.get("client-id", None)
-            if self.allowed_devices and device_id in self.allowed_devices:
-                # 如果属于白名单内的设备，不校验token，直接放行
-                return
-            else:
-                # 否则校验token
-                token = headers.get("authorization", "")
-                if token.startswith("Bearer "):
-                    token = token[7:]  # 移除'Bearer '前缀
-                else:
-                    raise AuthenticationError("Missing or invalid Authorization header")
-                # 进行认证
-                auth_success = self.auth.verify_token(
-                    token, client_id=client_id, username=device_id
-                )
-                if not auth_success:
-                    raise AuthenticationError("Invalid token")
+            if not device_allowed(device_id, self.allowed_devices, True):
+                raise AuthenticationError("Device is not allowlisted")
+            token = headers.get("authorization", "")
+            if token.startswith("Bearer "):
+                token = token[7:]  # 移除'Bearer '前缀
+            token = token.strip()
+            if not token:
+                raise AuthenticationError("Missing or invalid Authorization header")
+            auth_success = self.auth.verify_token(
+                token, client_id=client_id, username=device_id
+            )
+            if not auth_success:
+                raise AuthenticationError("Invalid token")

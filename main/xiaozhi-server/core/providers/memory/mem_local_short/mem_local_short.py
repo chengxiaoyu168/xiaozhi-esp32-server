@@ -2,11 +2,27 @@ from ..base import MemoryProviderBase, logger
 import time
 import json
 import os
+import threading
 import yaml
 from config.config_loader import get_project_dir
 from config.manage_api_client import generate_and_save_chat_summary
 import asyncio
 from core.utils.util import check_model_key
+
+# One lock per memory file so two device connections cannot clobber each
+# other's read-modify-write, and a reconnect waits until the previous save
+# finishes.
+_memory_file_locks = {}
+_memory_file_locks_guard = threading.Lock()
+
+
+def _lock_for(path: str) -> threading.Lock:
+    with _memory_file_locks_guard:
+        lock = _memory_file_locks.get(path)
+        if lock is None:
+            lock = threading.Lock()
+            _memory_file_locks[path] = lock
+        return lock
 
 
 short_term_memory_prompt = """
@@ -100,7 +116,10 @@ class MemoryProvider(MemoryProviderBase):
         super().__init__(config)
         self.short_memory = ""
         self.save_to_file = True
-        self.memory_path = get_project_dir() + "data/.memory.yaml"
+        configured = ""
+        if isinstance(config, dict):
+            configured = config.get("file_path") or config.get("memory_file") or ""
+        self.memory_path = configured or (get_project_dir() + "data/.memory.yaml")
         self.load_memory(summary_memory)
 
     def init_memory(
@@ -110,27 +129,46 @@ class MemoryProvider(MemoryProviderBase):
         self.save_to_file = save_to_file
         self.load_memory(summary_memory)
 
+    def _read_all_memory(self):
+        if not os.path.exists(self.memory_path):
+            return {}
+        with open(self.memory_path, "r", encoding="utf-8") as f:
+            loaded = yaml.safe_load(f) or {}
+        if not isinstance(loaded, dict):
+            return {}
+        return loaded
+
     def load_memory(self, summary_memory):
         # api获取到总结记忆后直接返回
         if summary_memory or not self.save_to_file:
-            self.short_memory = summary_memory
+            self.short_memory = summary_memory or ""
             return
 
-        all_memory = {}
-        if os.path.exists(self.memory_path):
-            with open(self.memory_path, "r", encoding="utf-8") as f:
-                all_memory = yaml.safe_load(f) or {}
-        if self.role_id in all_memory:
-            self.short_memory = all_memory[self.role_id]
+        # role_id 未绑定前不能把上一台设备的摘要留在这个实例上
+        if not self.role_id:
+            self.short_memory = ""
+            return
+
+        with _lock_for(self.memory_path):
+            all_memory = self._read_all_memory()
+        saved = all_memory.get(self.role_id, "")
+        # 缺席必须清空。共享实例上一次连接的 short_memory 不能漏给别的 device-id。
+        self.short_memory = saved or ""
 
     def save_memory_to_file(self):
-        all_memory = {}
-        if os.path.exists(self.memory_path):
-            with open(self.memory_path, "r", encoding="utf-8") as f:
-                all_memory = yaml.safe_load(f) or {}
-        all_memory[self.role_id] = self.short_memory
-        with open(self.memory_path, "w", encoding="utf-8") as f:
-            yaml.dump(all_memory, f, allow_unicode=True)
+        if not self.role_id:
+            raise ValueError("role_id 未设置，拒绝写入记忆")
+        lock = _lock_for(self.memory_path)
+        with lock:
+            all_memory = self._read_all_memory()
+            all_memory[self.role_id] = self.short_memory
+            parent = os.path.dirname(self.memory_path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            with open(self.memory_path, "w", encoding="utf-8") as f:
+                yaml.dump(all_memory, f, allow_unicode=True)
+                f.flush()
+                os.fsync(f.fileno())
 
     async def save_memory(self, msgs, session_id=None):
         # 打印使用的模型信息
@@ -142,6 +180,10 @@ class MemoryProvider(MemoryProviderBase):
             logger.bind(tag=TAG).error(memory_key_msg)
         if self.llm is None:
             logger.bind(tag=TAG).error("LLM is not set for memory provider")
+            return None
+
+        if not self.role_id:
+            logger.bind(tag=TAG).error("记忆保存跳过: role_id 未设置")
             return None
 
         if len(msgs) < 2:
@@ -173,6 +215,7 @@ class MemoryProvider(MemoryProviderBase):
         time_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         msgStr += f"当前时间：{time_str}"
 
+        saved = False
         if self.save_to_file:
             try:
                 result = self.llm.response_no_stream(
@@ -185,17 +228,19 @@ class MemoryProvider(MemoryProviderBase):
                 json.loads(json_str)  # 检查json格式是否正确
                 self.short_memory = json_str
                 self.save_memory_to_file()
+                saved = True
             except Exception as e:
                 logger.bind(tag=TAG).error(f"Error in saving memory: {e}")
         else:
             # 当save_to_file为False时，调用Java端的聊天记录总结接口
             summary_id = session_id if session_id else self.role_id
             await generate_and_save_chat_summary(summary_id)
-        logger.bind(tag=TAG).info(
-            f"Save memory successful - Role: {self.role_id}, Session: {session_id}"
-        )
-
-        return self.short_memory
+            saved = True
+        if saved:
+            logger.bind(tag=TAG).info(
+                f"Save memory successful - Role: {self.role_id}, Session: {session_id}"
+            )
+        return self.short_memory if saved else None
 
     async def query_memory(self, query: str) -> str:
         return self.short_memory

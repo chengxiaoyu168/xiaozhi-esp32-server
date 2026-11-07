@@ -48,8 +48,13 @@ class SimpleHttpServer:
                         [
                             web.get("/xiaozhi/ota/", self.ota_handler.handle_get),
                             web.post("/xiaozhi/ota/", self.ota_handler.handle_post),
+                            web.get("/xiaozhi/ota", self.ota_handler.handle_get),
+                            web.post("/xiaozhi/ota", self.ota_handler.handle_post),
                             web.options(
                                 "/xiaozhi/ota/", self.ota_handler.handle_options
+                            ),
+                            web.options(
+                                "/xiaozhi/ota", self.ota_handler.handle_options
                             ),
                             # 下载接口，仅提供 data/bin/*.bin 下载
                             web.get(

@@ -10,6 +10,31 @@ class AuthenticationError(Exception):
     pass
 
 
+def normalize_device_id(device_id) -> str:
+    """Compare MAC / device ids without case or surrounding whitespace."""
+    return str(device_id or "").strip().lower()
+
+
+def device_allowed(device_id, allowed_devices, auth_enabled: bool) -> bool:
+    """Gate OTA token issuance and websocket admission.
+
+    Auth disabled: every device is accepted (single-module open mode).
+    Auth enabled: fail closed. Only ids listed in ``allowed_devices`` pass.
+    An empty allowlist allows nobody. Matching is case-insensitive; the
+    token itself is still signed with the device's original header value.
+    """
+    if not auth_enabled:
+        return True
+    allowed = set()
+    for item in allowed_devices or []:
+        normalized = normalize_device_id(item)
+        if normalized:
+            allowed.add(normalized)
+    if not allowed:
+        return False
+    return normalize_device_id(device_id) in allowed
+
+
 class AuthManager:
     """
     统一授权认证管理器

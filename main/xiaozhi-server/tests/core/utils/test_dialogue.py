@@ -72,6 +72,27 @@ async def test_get_llm_dialogue_with_memory_substitutes_into_system_message():
     assert "<memory></memory>" not in system["content"]
 
 
+def test_memory_is_appended_when_prompt_has_no_memory_slot():
+    """快速提示词没有 <memory> 标签时，已加载的摘要仍要进入 system。"""
+    d = Dialogue()
+    d.update_system_message("你是小智。")
+    fact = "测试机器人喜欢蓝色纸风车"
+    msgs = d.get_llm_dialogue_with_memory(memory_str=fact)
+    system = next(m for m in msgs if m["role"] == "system")
+    assert fact in system["content"]
+    assert "<memory>" in system["content"]
+    assert system["content"].startswith("你是小智。")
+
+
+def test_memory_json_backslashes_are_not_eaten_by_regex():
+    d = Dialogue()
+    d.update_system_message("角色\n<memory>\n</memory>")
+    raw = '{"高光语录": ["测试机器人喜欢蓝色纸风车\\n"]}'
+    msgs = d.get_llm_dialogue_with_memory(memory_str=raw)
+    system = next(m for m in msgs if m["role"] == "system")
+    assert raw in system["content"]
+
+
 @pytest.mark.asyncio
 async def test_get_llm_dialogue_separates_temporary_few_shot_from_actual_history():
     d = Dialogue()

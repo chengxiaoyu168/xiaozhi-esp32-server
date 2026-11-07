@@ -9,7 +9,7 @@ import glob
 from typing import Dict, List, Tuple
 from aiohttp import web
 
-from core.auth import AuthManager
+from core.auth import AuthManager, device_allowed
 from core.utils.util import get_local_ip, get_vision_url
 from core.api.base_handler import BaseHandler
 
@@ -280,14 +280,27 @@ class OTAHandler(BaseHandler):
                 self.logger.bind(tag=TAG).info(f"为设备 {device_id} 下发MQTT网关配置")
 
             else:  # 未配置 mqtt_gateway，下发 WebSocket
-                # 如果开启了认证，则进行认证校验
+                # 开启认证后只给允许列表中的设备签发 token。
+                # 官方简化 OTA 原先会给任意 Device-Id 签名，公开该接口等于开放接入。
                 token = ""
                 if self.auth_enable:
-                    if self.allowed_devices:
-                        if device_id not in self.allowed_devices:
-                            token = self.auth.generate_token(client_id, device_id)
-                    else:
-                        token = self.auth.generate_token(client_id, device_id)
+                    if not device_allowed(device_id, self.allowed_devices, True):
+                        self.logger.bind(tag=TAG).warning(
+                            f"拒绝为未允许的设备签发 OTA token: {device_id}"
+                        )
+                        response = web.Response(
+                            text=json.dumps(
+                                {
+                                    "success": False,
+                                    "message": "device not allowlisted",
+                                },
+                                separators=(",", ":"),
+                            ),
+                            content_type="application/json",
+                            status=403,
+                        )
+                        return response
+                    token = self.auth.generate_token(client_id, device_id)
                 # NOTE: use websocket_port here
                 return_json["websocket"] = {
                     "url": self._get_websocket_url(local_ip, websocket_port),

@@ -1,0 +1,19 @@
+# 本地构建。不要再拉取 ghcr 上带 ModelScope 1.13 下载器的官方镜像。
+# 官方镜像启动时会下载 configuration.json，Content-Length 为空（正文约 392 字节）
+# 会被判为不完整并一直重试。这里改为挂载已经下好的 snapshot。
+
+services:
+  voiceprint-api:
+    build: .
+    image: voiceprint-api:local
+    container_name: voiceprint-api
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8005:8005"
+    environment:
+      - TZ=Asia/Shanghai
+      - VOICEPRINT_MODEL_DIR=/models/campplus
+    volumes:
+      - ./data:/app/data
+      # 指到 snapshot 目录本身（内含 configuration.json 和权重），不是 cache 根目录。
+      - ${VOICEPRINT_MODEL_DIR:?set VOICEPRINT_MODEL_DIR to the snapshot directory}:/models/campplus:ro
