@@ -9,7 +9,14 @@ import glob
 from typing import Dict, List, Tuple
 from aiohttp import web
 
-from core.auth import AuthManager, device_allowed
+from config.config_loader import get_project_dir
+from core.auth import (
+    AuthManager,
+    bootstrap_matches,
+    device_allowed,
+    load_bootstrap_secret,
+    load_public_websocket_url,
+)
 from core.utils.util import get_local_ip, get_vision_url
 from core.api.base_handler import BaseHandler
 
@@ -52,7 +59,17 @@ class OTAHandler(BaseHandler):
         self.allowed_devices = set(auth_config.get("allowed_devices", []))
         secret_key = config["server"]["auth_key"]
         expire_seconds = auth_config.get("expire_seconds")
-        self.auth = AuthManager(secret_key=secret_key, expire_seconds=expire_seconds)
+        self.auth = AuthManager(
+            secret_key=secret_key,
+            expire_seconds=expire_seconds,
+            token_epoch=auth_config.get("token_epoch", 0),
+        )
+        self._bootstrap_file = auth_config.get("ota_bootstrap_file") or os.path.join(
+            get_project_dir(), "data", ".ota-bootstrap"
+        )
+        self._public_wss_file = config["server"].get("public_wss_file") or os.path.join(
+            get_project_dir(), "data", ".public-wss"
+        )
 
         # firmware storage
         self.bin_dir = os.path.join(os.getcwd(), "data", "bin")
@@ -140,6 +157,35 @@ class OTAHandler(BaseHandler):
         else:
             return f"ws://{local_ip}:{port}/xiaozhi/v1/"
 
+    def _current_websocket_url(self, local_ip: str, port: int) -> str:
+        published = load_public_websocket_url(self._public_wss_file)
+        if published:
+            return published
+        return self._get_websocket_url(local_ip, port)
+
+    def _not_found(self):
+        return web.Response(
+            text=json.dumps({"success": False, "message": "not found"}, separators=(",", ":")),
+            content_type="application/json",
+            status=404,
+        )
+
+    def _gate_bootstrap(self, request):
+        """Return a denial response, or None when this request may continue.
+
+        Firmware 2.5.2 posts the configured OTA URL as-is and does not follow
+        redirects, so the credential is the path segment itself. The plain
+        /xiaozhi/ota/ path never carries it and is rejected when auth is on.
+        """
+        if not self.auth_enable:
+            return None
+        expected = load_bootstrap_secret(self._bootstrap_file)
+        presented = request.match_info.get("bootstrap", "")
+        if not bootstrap_matches(presented, expected):
+            self.logger.bind(tag=TAG).info("OTA 拒绝")
+            return self._not_found()
+        return None
+
     async def handle_post(self, request):
         """处理 OTA POST 请求
 
@@ -150,10 +196,11 @@ class OTAHandler(BaseHandler):
         - if found a newer firmware, set firmware.url to the download endpoint
         """
         try:
+            denied = self._gate_bootstrap(request)
+            if denied is not None:
+                response = denied
+                return response
             data = await request.text()
-            self.logger.bind(tag=TAG).debug(f"OTA请求方法: {request.method}")
-            self.logger.bind(tag=TAG).debug(f"OTA请求头: {request.headers}")
-            self.logger.bind(tag=TAG).debug(f"OTA请求数据: {data}")
 
             device_id = request.headers.get("device-id", "")
             if device_id:
@@ -303,7 +350,7 @@ class OTAHandler(BaseHandler):
                     token = self.auth.generate_token(client_id, device_id)
                 # NOTE: use websocket_port here
                 return_json["websocket"] = {
-                    "url": self._get_websocket_url(local_ip, websocket_port),
+                    "url": self._current_websocket_url(local_ip, websocket_port),
                     "token": token,
                 }
                 self.logger.bind(tag=TAG).info(
@@ -368,11 +415,15 @@ class OTAHandler(BaseHandler):
     async def handle_get(self, request):
         """处理 OTA GET 请求"""
         try:
+            denied = self._gate_bootstrap(request)
+            if denied is not None:
+                response = denied
+                return response
             server_config = self.config["server"]
             local_ip = get_local_ip()
             # use websocket port for websocket URL
             websocket_port = int(server_config.get("port", 8000))
-            websocket_url = self._get_websocket_url(local_ip, websocket_port)
+            websocket_url = self._current_websocket_url(local_ip, websocket_port)
             message = f"OTA接口运行正常，向设备发送的websocket地址是：{websocket_url}"
             response = web.Response(text=message, content_type="text/plain")
         except Exception as e:

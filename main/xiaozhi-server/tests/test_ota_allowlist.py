@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import secrets
 import time
 
 import websockets
@@ -80,13 +82,27 @@ def _server_config(port: int, *, enabled: bool, allowed, expire_seconds=3600):
     }
 
 
-async def _ota(config, device_id, client_id="client-1"):
+def _arm_bootstrap(config, directory) -> str:
+    secret = secrets.token_urlsafe(32)
+    path = directory / ".ota-bootstrap"
+    path.write_text(secret + "\n", encoding="utf-8")
+    os.chmod(path, 0o600)
+    config["server"]["auth"]["ota_bootstrap_file"] = str(path)
+    return secret
+
+
+async def _ota(config, device_id, client_id="client-1", bootstrap=None):
     handler = OTAHandler(config)
     app = web.Application()
     app.router.add_post("/xiaozhi/ota/", handler.handle_post)
-    async with TestClient(TestServer(app)) as client:
+    app.router.add_post(
+        r"/xiaozhi/ota/{bootstrap:[A-Za-z0-9_-]{32,128}}/",
+        handler.handle_post,
+    )
+    target = "/xiaozhi/ota/" if not bootstrap else f"/xiaozhi/ota/{bootstrap}/"
+    async with TestClient(TestServer(app, access_log=None)) as client:
         response = await client.post(
-            "/xiaozhi/ota/",
+            target,
             headers={"Device-Id": device_id, "Client-Id": client_id},
             json={
                 "application": {"version": "2.5.2"},
@@ -98,19 +114,23 @@ async def _ota(config, device_id, client_id="client-1"):
         return response.status, body
 
 
-def test_ota_signs_only_allowlisted_devices_and_token_roundtrips():
+def test_ota_signs_only_allowlisted_devices_and_token_roundtrips(tmp_path):
     config = _server_config(0, enabled=True, allowed=["AA:BB:CC:DD:EE:10"])
+    secret = _arm_bootstrap(config, tmp_path)
     _prime_runtime_config(config)
 
     async def _run():
-        status, body = await _ota(config, "aa:bb:cc:dd:ee:10", "client-a")
+        status, body = await _ota(config, "aa:bb:cc:dd:ee:10", "client-a", secret)
         assert status == 200, body
         token = body["websocket"]["token"]
         assert token
         assert "Bearer" not in token
+        assert secret not in json.dumps(body)
         assert body["websocket"]["url"].endswith("/xiaozhi/v1/")
 
-        denied, denied_body = await _ota(config, "aa:bb:cc:dd:ee:99", "client-x")
+        denied, denied_body = await _ota(
+            config, "aa:bb:cc:dd:ee:99", "client-x", secret
+        )
         assert denied == 403
         assert denied_body.get("message") == "device not allowlisted"
         assert "websocket" not in denied_body
@@ -138,14 +158,16 @@ def test_auth_disabled_keeps_open_ota_without_a_token():
     asyncio.run(_run())
 
 
-def test_empty_allowlist_fails_closed():
+def test_empty_allowlist_fails_closed(tmp_path):
     config = _server_config(0, enabled=True, allowed=[])
+    secret = _arm_bootstrap(config, tmp_path)
     _prime_runtime_config(config)
 
     async def _run():
-        status, body = await _ota(config, "aa:bb:cc:dd:ee:10")
+        status, body = await _ota(config, "aa:bb:cc:dd:ee:10", bootstrap=secret)
         assert status == 403
         assert "token" not in json.dumps(body)
+        assert secret not in json.dumps(body)
 
     asyncio.run(_run())
 

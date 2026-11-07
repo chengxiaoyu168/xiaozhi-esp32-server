@@ -30,9 +30,11 @@ server:
   # 认证配置
   auth:
     # 是否启用认证。关闭时保持单模块开放行为。
-    # 开启后：OTA 只给 allowed_devices 中的设备签发 token；
-    # WebSocket 必须携带该 token，允许列表不再跳过校验。
-    # 列表为空时拒绝全部设备（fail closed）。
+    # 开启后：公网标准路径 /xiaozhi/ota/ 不签发 token。
+    # 固件 OTA URL 必须带 data/.ota-bootstrap 里的路径凭证（本地生成，不写进仓库）。
+    # 凭证正确之后，仍只给 allowed_devices 签发 WebSocket token。
+    # WebSocket 必须携带该 token。列表为空时拒绝全部设备。
+    # 把 auth.token_epoch 加一后重启，可立即作废已发出的 WebSocket token。
     enabled: false
     # token 有效期（秒）。不填则 30 天。
     # 固件 2.5.2 只在每次开机的 OTA 检查里刷新 token，运行中的重连会复用

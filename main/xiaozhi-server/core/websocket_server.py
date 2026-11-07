@@ -66,7 +66,11 @@ class WebSocketServer:
         self.allowed_devices = set(auth_config.get("allowed_devices", []))
         secret_key = self.config["server"]["auth_key"]
         expire_seconds = auth_config.get("expire_seconds", None)
-        self.auth = AuthManager(secret_key=secret_key, expire_seconds=expire_seconds)
+        self.auth = AuthManager(
+            secret_key=secret_key,
+            expire_seconds=expire_seconds,
+            token_epoch=auth_config.get("token_epoch", 0),
+        )
 
     async def start(self):
         server_config = self.config["server"]

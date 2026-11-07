@@ -53,28 +53,33 @@ Memory:
     llm: DeepSeekLLM
 ```
 
-允许列表为空且 `auth.enabled: true` 时，OTA 和 WebSocket 都拒绝。列表比较忽略大小写，token 仍按设备送来的原始 `Device-Id` / `Client-Id` 签名。
+允许列表为空且 `auth.enabled: true` 时，OTA 和 WebSocket 都拒绝。MAC 只是第二道限制，不能单独当凭证。
 
-开启认证之后：
+固件 2.5.2 把菜单里的 OTA URL 原样 POST 出去，不跟随重定向（`78/esp-ml307` HttpClient 3.7）。所以引导凭证必须就在这条 URL 的路径里，不能靠 302，也不能靠额外请求头。URL 要以 `/` 结尾。
 
-- 只有列表中的设备能从 `POST /xiaozhi/ota/` 拿到 `websocket.token`。其他设备是 HTTP 403，响应里没有 token。
-- WebSocket 必须带 `Authorization: Bearer <token>`。在列表里但没有 token、token 错误、token 过期、或不在列表里，都会收到 `认证失败` 并断开。
-- 固件 2.5.2 在 token 不含空格时自己加 `Bearer `，所以 OTA 返回的是不带前缀的 token。
-- 设备每次开机先打 OTA，再把返回的 `url` 和 `token` 写入 NVS，然后才连 WebSocket。这就是续期路径。服务端不把 API key 下发给设备。
-- 同一把 `auth_key` 重启后，未过期的 token 仍然有效。换了 key，要等设备下次开机重新 OTA。
+```bash
+python3 deploy/ota/generate-bootstrap.py
+# 不打印凭证。只在本机读取 data/.ota-bootstrap，填进固件：
+#   https://<tunnel-host>/xiaozhi/ota/<那个文件的一行>/
+# 作废旧地址：python3 deploy/ota/generate-bootstrap.py --rotate
+# 作废已经发出的 WebSocket token：把 data/.config.yaml 里 auth.token_epoch 加一后重启服务。
+```
 
-`auth.enabled: false` 时行为与原来的单模块开放模式相同，不签发 token。
+公网或反代上的 `POST /xiaozhi/ota/` 一律 404，不签发 token。路径凭证正确但 MAC 不在允许列表里是 403。凭证正确且 MAC 在列表里才返回当前的 `websocket.url` 和 `websocket.token`。WebSocket 仍要 `Authorization: Bearer <token>`，无效 token 拒绝。服务访问日志不要打开，路径会落到日志里。
 
-## Caddy
+`auth.enabled: false` 时仍是原来的本机开放模式，不检查路径凭证。
 
-`deploy/caddy/Caddyfile` 在 `127.0.0.1:18766` 上同时反代：
+## Caddy 和临时隧道
 
-- `/xiaozhi/v1/*` → `127.0.0.1:8000`
-- `/xiaozhi/ota*` → `127.0.0.1:8003`
+`deploy/caddy/Caddyfile` 只听 `127.0.0.1:18766`，反代 `/xiaozhi/v1/*` 到 8000、`/xiaozhi/ota*` 到 8003，访问日志丢掉。文件里没有凭证。重载 Caddy。不要动 Docker 的 `0.0.0.0:2375`。
 
-固件 OTA 地址填 `http://127.0.0.1:18766/xiaozhi/ota/`。设备如果不在这台机器上，父机需要自行把 Caddy 改到局域网地址；不要改成对公网开放。OTA 没有设备私钥，知道允许列表里的 MAC 就能换 token。
+免费临时隧道（每次启动主机名会变，OTA 每次请求读 `data/.public-wss`，不用重启服务）：
 
-加载配置后重载 Caddy。不要动 Docker 的 `0.0.0.0:2375`。
+```bash
+sh deploy/tunnel/start-quick-tunnel.sh
+```
+
+需要本机已有官方 `cloudflared`。脚本把 `wss://<host>/xiaozhi/v1/` 写进 `data/.public-wss`。不要在这台云代理上跑它。
 
 ## 声纹
 
