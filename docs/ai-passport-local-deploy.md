@@ -71,15 +71,19 @@ python3 deploy/ota/generate-bootstrap.py
 
 ## Caddy 和临时隧道
 
-`deploy/caddy/Caddyfile` 只听 `127.0.0.1:18766`，反代 `/xiaozhi/v1/*` 到 8000、`/xiaozhi/ota*` 到 8003，访问日志丢掉。文件里没有凭证。重载 Caddy。不要动 Docker 的 `0.0.0.0:2375`。
+`deploy/caddy/Caddyfile` 用站点地址和 `bind 127.0.0.1` 只听本机 `18766`，反代 `/xiaozhi/v1/*` 到 8000、`/xiaozhi/ota*` 到 8003，访问日志丢掉。文件里没有凭证。重载 Caddy。不要动 Docker 的 `0.0.0.0:2375`。
 
-免费临时隧道（每次启动主机名会变，OTA 每次请求读 `data/.public-wss`，不用重启服务）：
+临时隧道脚本只负责把 cloudflared 的日志收成文件。它修不了网络。
 
 ```bash
 sh deploy/tunnel/start-quick-tunnel.sh
+# 只有日志出现 Registered tunnel connection 才写 data/.public-wss
+# 只有主机名、没有这条登记日志时，写 data/.public-wss.unverified，OTA 不读它
 ```
 
-需要本机已有官方 `cloudflared`。脚本把 `wss://<host>/xiaozhi/v1/` 写进 `data/.public-wss`。不要在这台云代理上跑它。
+`--loglevel error` 会丢掉主机名：cloudflared 用 Info 打 `https://….trycloudflare.com`。脚本固定 `--loglevel info`。父机上 info 日志已经能看到主机名，同时没有 Registered tunnel connection，公网请求 530。那是路径问题，不是解析问题。
+
+本机 cloudflared 2026.10.7 没有 HTTP(S)_PROXY / ALL_PROXY。系统 DNS 对 Cloudflare 的 feature、API、region 名返回 198.18.0.1。`--protocol http2` 时 TCP 7844 能连上，TLS 立刻 EOF；QUIC 超时。脚本不改 DNS、不设代理、不自动换协议。需要时自己设 `CLOUDFLARED_PROTOCOL=auto|quic|http2`，这不会绕过已经挡住的 Cloudflare 路径。这台云代理没有复现父机网络。
 
 ## 声纹
 
