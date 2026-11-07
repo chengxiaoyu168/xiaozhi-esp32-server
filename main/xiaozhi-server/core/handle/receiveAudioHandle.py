@@ -40,7 +40,28 @@ async def resume_vad_detection(conn: "ConnectionHandler"):
     conn.just_woken_up = False
 
 
+async def _wait_for_memory_ready(conn: "ConnectionHandler"):
+    """Block user turns until this connection has loaded its own memory."""
+    ready = getattr(conn, "memory_ready", None)
+    if ready is None or ready.is_set():
+        return
+    timeout = conn.config.get("memory_init_timeout", 120)
+    try:
+        timeout = float(timeout)
+    except (TypeError, ValueError):
+        timeout = 120.0
+    if timeout <= 0:
+        return
+    try:
+        await asyncio.wait_for(ready.wait(), timeout=timeout)
+    except asyncio.TimeoutError:
+        conn.logger.bind(tag=TAG).warning(
+            "记忆模块初始化超时，本轮可能读不到已保存的记忆"
+        )
+
+
 async def startToChat(conn: "ConnectionHandler", text):
+    await _wait_for_memory_ready(conn)
     # 检查输入是否是JSON格式（包含说话人信息）
     speaker_name = None
     actual_text = text

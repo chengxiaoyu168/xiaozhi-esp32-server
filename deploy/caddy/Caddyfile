@@ -1,0 +1,25 @@
+# Local reverse proxy. Listen on 127.0.0.1:18766 only.
+# cloudflared quick tunnel should target this listener.
+# Do not enable access logs: the firmware OTA URL path is a credential.
+# This file contains no secret.
+
+{
+	admin off
+	auto_https off
+}
+
+http://127.0.0.1:18766 {
+	bind 127.0.0.1
+	log {
+		output discard
+	}
+	handle /xiaozhi/v1/* {
+		reverse_proxy 127.0.0.1:8000
+	}
+	handle /xiaozhi/ota* {
+		reverse_proxy 127.0.0.1:8003
+	}
+	handle {
+		respond "not found" 404
+	}
+}

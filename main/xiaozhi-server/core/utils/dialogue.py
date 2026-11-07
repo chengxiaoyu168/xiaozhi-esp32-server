@@ -91,6 +91,36 @@ class Dialogue:
 
         return result
 
+    @staticmethod
+    def _inject_memory_block(full_prompt: str, memory_str: str = None) -> str:
+        """Put the saved summary into the system prompt.
+
+        ``re.sub`` replacement strings treat backslashes as escapes, and the
+        summary is raw JSON, so the replacement is a callable. When the active
+        prompt has no ``<memory>`` slot (the quick prompt used before template
+        enhancement, or a custom persona), append one. Empty memory does not
+        invent a slot.
+        """
+        if memory_str is None:
+            return full_prompt
+        block = f"<memory>\n{memory_str}\n</memory>"
+
+        def _replace(_match):
+            return block
+
+        updated, count = re.subn(
+            r"<memory>.*?</memory>",
+            _replace,
+            full_prompt,
+            count=1,
+            flags=re.DOTALL,
+        )
+        if count:
+            return updated
+        if str(memory_str).strip():
+            return full_prompt.rstrip() + "\n\n" + block
+        return full_prompt
+
     def get_llm_dialogue_with_memory(
             self, memory_str: str = None, voiceprint_config: dict = None,
             current_speaker: str = None,
@@ -111,14 +141,9 @@ class Dialogue:
                 "{{current_time}}", datetime.now().strftime("%H:%M")
             )
 
-            # 填充记忆
-            if memory_str is not None:
-                full_prompt = re.sub(
-                    r"<memory>.*?</memory>",
-                    f"<memory>\n{memory_str}\n</memory>",
-                    full_prompt,
-                    flags=re.DOTALL,
-                )
+            # 填充记忆。快速提示词和自定义人设不一定带 <memory> 标签；
+            # 标签缺失时把已加载的摘要追加进去，否则重连后模型看不到记忆。
+            full_prompt = self._inject_memory_block(full_prompt, memory_str)
 
             # 追加说话人信息
             try:

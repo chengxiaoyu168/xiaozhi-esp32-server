@@ -139,6 +139,9 @@ class ConnectionHandler:
         self.llm = _llm
         self.memory = _memory
         self.intent = _intent
+        # 记忆按连接隔离。在 _initialize_memory 完成前，对话必须等待，
+        # 否则会读到共享实例上的空摘要或上一台设备的摘要。
+        self.memory_ready = asyncio.Event()
 
         # 为每个连接单独管理声纹识别
         self.voiceprint_provider = None
@@ -603,6 +606,16 @@ class ConnectionHandler:
                 )
             )
 
+    def _mark_memory_ready(self):
+        ready = getattr(self, "memory_ready", None)
+        if ready is None or ready.is_set():
+            return
+        loop = getattr(self, "loop", None)
+        if loop is not None and loop.is_running():
+            loop.call_soon_threadsafe(ready.set)
+        else:
+            ready.set()
+
     def _initialize_components(self):
         try:
             if self.tts is None:
@@ -655,6 +668,9 @@ class ConnectionHandler:
 
         except Exception as e:
             self.logger.bind(tag=TAG).error(f"实例化组件失败: {e}")
+        finally:
+            # _initialize_memory 成功时会提前放开；这里兜住提前返回和异常。
+            self._mark_memory_ready()
 
     def _init_prompt_enhancement(self):
 
@@ -957,31 +973,29 @@ class ConnectionHandler:
             self.memory = modules["memory"]
 
     def _initialize_memory(self):
-        if self.memory is None:
-            return
-        """初始化记忆模块"""
-        self.memory.init_memory(
-            role_id=self.device_id,
-            llm=self.llm,
-            summary_memory=self.config.get("summaryMemory", None),
-            save_to_file=not self.read_config_from_api,
-        )
+        """为当前连接创建独立记忆实例，并按 device-id 加载摘要。"""
+        try:
+            selected = self.config.get("selected_module", {}).get("Memory")
+            memory_root = self.config.get("Memory") or {}
+            if not selected or selected not in memory_root:
+                return
+            memory_config = memory_root[selected]
+            memory_type = memory_config.get("type", selected)
+            from core.utils import memory as memory_utils
 
-        # 获取记忆总结配置
-        memory_config = self.config["Memory"]
-        memory_type = self.config["Memory"][self.config["selected_module"]["Memory"]][
-            "type"
-        ]
-        # 如果使用 nomen 或 mem_report_only，直接返回
-        if memory_type == "nomem" or memory_type == "mem_report_only":
-            return
-        # 使用 mem_local_short 模式
-        elif memory_type == "mem_local_short":
-            memory_llm_name = memory_config[self.config["selected_module"]["Memory"]][
-                "llm"
-            ]
-            if memory_llm_name and memory_llm_name in self.config["LLM"]:
-                # 如果配置了专用LLM，则创建独立的LLM实例
+            # 不把 summaryMemory 传给构造函数：构造时 role_id 还是空的，
+            # 非空摘要会跳过按角色读文件。真正的加载在 init_memory。
+            self.memory = memory_utils.create_instance(memory_type, memory_config, None)
+            self.memory.init_memory(
+                role_id=self.device_id,
+                llm=self.llm,
+                summary_memory=self.config.get("summaryMemory", None),
+                save_to_file=not self.read_config_from_api,
+            )
+            if memory_type in ("nomem", "mem_report_only") or self.memory is None:
+                return
+            memory_llm_name = memory_config.get("llm")
+            if memory_type == "mem_local_short" and memory_llm_name and memory_llm_name in self.config.get("LLM", {}):
                 from core.utils import llm as llm_utils
 
                 memory_llm_config = self.config["LLM"][memory_llm_name]
@@ -993,10 +1007,13 @@ class ConnectionHandler:
                     f"为记忆总结创建了专用LLM: {memory_llm_name}, 类型: {memory_llm_type}"
                 )
                 self.memory.set_llm(memory_llm)
-            else:
-                # 否则使用主LLM
+            elif memory_type == "mem_local_short":
                 self.memory.set_llm(self.llm)
-                self.logger.bind(tag=TAG).info("使用主LLM作为意图识别模型")
+                self.logger.bind(tag=TAG).info("使用主LLM作为记忆总结模型")
+        except Exception as e:
+            self.logger.bind(tag=TAG).error(f"初始化连接记忆失败: {e}")
+        finally:
+            self._mark_memory_ready()
 
     def _initialize_intent(self):
         if self.intent is None:

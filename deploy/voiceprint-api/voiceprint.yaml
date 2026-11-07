@@ -1,0 +1,31 @@
+server:
+  # 只监听本机。设备不直连这个端口，由本机反代或 xiaozhi-server 访问。
+  host: 127.0.0.1
+  # 服务监听端口
+  port: 8005
+  # 接口访问令牌。留空或短于 32 位时启动会在 data/.voiceprint.yaml 里生成。
+  # 生成后只放在本机配置里，不要写进镜像或仓库。
+  authorization:
+
+voiceprint:
+  # 已下载的 iic/speech_campplus_sv_zh-cn_3dspeaker_16k snapshot 目录。
+  # 该目录必须直接包含 configuration.json 和约 29MB 的权重文件。
+  # 新版 ModelScope 的布局是 .../snapshots/v1.0.0/ 。
+  # 也可以用环境变量 VOICEPRINT_MODEL_DIR 覆盖（容器挂载时用这个）。
+  # 留空则只在 MODELSCOPE_CACHE 和 ~/.cache/modelscope 里找完整 snapshot，
+  # 找不到就退出，不会再走 ModelScope 1.13 那个会因 Content-Length 为空而失败的下载器。
+  model_id: iic/speech_campplus_sv_zh-cn_3dspeaker_16k
+  model_revision: v1.0.0
+  model_dir: "" 
+
+mysql:
+  # MySQL数据库主机地址
+  host: "127.0.0.1"
+  # 端口  
+  port: 3306
+  # 用户名          
+  user: "root"
+  # 用户密码         
+  password: "123456"
+  # 数据库名
+  database: "voiceprint_db"

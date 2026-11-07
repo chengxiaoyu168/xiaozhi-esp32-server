@@ -46,12 +46,6 @@ class SimpleHttpServer:
                     # 如果没有开启智控台，只是单模块运行，就需要再添加简单OTA接口，用于下发websocket接口
                     app.add_routes(
                         [
-                            web.get("/xiaozhi/ota/", self.ota_handler.handle_get),
-                            web.post("/xiaozhi/ota/", self.ota_handler.handle_post),
-                            web.options(
-                                "/xiaozhi/ota/", self.ota_handler.handle_options
-                            ),
-                            # 下载接口，仅提供 data/bin/*.bin 下载
                             web.get(
                                 "/xiaozhi/ota/download/{filename}",
                                 self.ota_handler.handle_download,
@@ -59,6 +53,32 @@ class SimpleHttpServer:
                             web.options(
                                 "/xiaozhi/ota/download/{filename}",
                                 self.ota_handler.handle_options,
+                            ),
+                            web.get(
+                                r"/xiaozhi/ota/{bootstrap:[A-Za-z0-9_-]{32,128}}/",
+                                self.ota_handler.handle_get,
+                            ),
+                            web.post(
+                                r"/xiaozhi/ota/{bootstrap:[A-Za-z0-9_-]{32,128}}/",
+                                self.ota_handler.handle_post,
+                            ),
+                            web.get(
+                                r"/xiaozhi/ota/{bootstrap:[A-Za-z0-9_-]{32,128}}",
+                                self.ota_handler.handle_get,
+                            ),
+                            web.post(
+                                r"/xiaozhi/ota/{bootstrap:[A-Za-z0-9_-]{32,128}}",
+                                self.ota_handler.handle_post,
+                            ),
+                            web.get("/xiaozhi/ota/", self.ota_handler.handle_get),
+                            web.post("/xiaozhi/ota/", self.ota_handler.handle_post),
+                            web.get("/xiaozhi/ota", self.ota_handler.handle_get),
+                            web.post("/xiaozhi/ota", self.ota_handler.handle_post),
+                            web.options(
+                                "/xiaozhi/ota/", self.ota_handler.handle_options
+                            ),
+                            web.options(
+                                "/xiaozhi/ota", self.ota_handler.handle_options
                             ),
                         ]
                     )
@@ -76,7 +96,8 @@ class SimpleHttpServer:
                 )
 
                 # 运行服务
-                runner = web.AppRunner(app)
+                # 不记 access log。固件 OTA URL 的路径段是引导凭证。
+                runner = web.AppRunner(app, access_log=None)
                 await runner.setup()
                 site = web.TCPSite(runner, host, port)
                 await site.start()

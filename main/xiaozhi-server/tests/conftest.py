@@ -41,6 +41,14 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
+# setup_logging() 在导入业务模块时就会检查这个文件。测试环境没有生产配置时
+# 放一个空覆盖层，避免把密钥写进仓库（data/ 已被 gitignore）。
+_DATA_DIR = _PROJECT_ROOT / "data"
+_DATA_DIR.mkdir(exist_ok=True)
+_BOOT_CONFIG = _DATA_DIR / ".config.yaml"
+if not _BOOT_CONFIG.exists():
+    _BOOT_CONFIG.write_text("{}\n", encoding="utf-8")
+
 
 # ---------------------------------------------------------------------------
 # opuslib_next stub：让 import 链路通；真调音频会失败，测试自行 try/except
